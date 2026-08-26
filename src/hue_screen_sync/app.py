@@ -423,7 +423,7 @@ class ManualTab(QWidget):
 
     def _on_bri_slider(self, val):
         self._brightness = val
-        self._apply_to_bulbs()
+        self._update_display()
 
     def _on_hex_input(self):
         text = self._hex_edit.text().strip().lstrip("#")
@@ -468,8 +468,12 @@ class ManualTab(QWidget):
         self._update_display()
 
     def _update_display(self):
+        scale = self._brightness / 254.0
+        dr = int(self._r * scale)
+        dg = int(self._g * scale)
+        db = int(self._b * scale)
         self._big_swatch.setStyleSheet(
-            f"background: rgb({self._r},{self._g},{self._b}); "
+            f"background: rgb({dr},{dg},{db}); "
             "border-radius: 8px; border: 2px solid #555;")
         self._hex_edit.setText(f"#{self._r:02x}{self._g:02x}{self._b:02x}")
         self._apply_to_bulbs()

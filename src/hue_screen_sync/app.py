@@ -484,6 +484,9 @@ class ManualTab(QWidget):
 
     def _do_apply(self):
         r, g, b = self._r / 255.0, self._g / 255.0, self._b / 255.0
+        if max(r, g, b) < 0.004:
+            self._push(0.3127, 0.3290, 1)
+            return
         x, y = rgb_to_xy(r, g, b)
         self._push(x, y, self._brightness)
 

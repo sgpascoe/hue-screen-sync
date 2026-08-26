@@ -586,7 +586,6 @@ class MainWindow(QMainWindow):
         # toggle + mode buttons
         btn_row = QHBoxLayout()
         self.toggle_btn = QPushButton("Start Sync")
-        self.toggle_btn.setCheckable(True)
         self.toggle_btn.clicked.connect(self._toggle_sync)
         btn_row.addWidget(self.toggle_btn)
         self.mode_btn = QPushButton("Toggle Day / Night")
@@ -961,7 +960,7 @@ class MainWindow(QMainWindow):
             self.sync_thread.stop()
             self.sync_thread = None
             self.toggle_btn.setText("Start Sync")
-            self.toggle_btn.setChecked(False)
+            self.toggle_btn.setStyleSheet("")
             self.status_label.setText("Preview only")
             self.manual_tab.set_enabled_state(False)
             self._update_tray()
@@ -971,7 +970,7 @@ class MainWindow(QMainWindow):
             self.sync_thread.error_occurred.connect(self._on_error)
             self.sync_thread.start()
             self.toggle_btn.setText("Stop Sync")
-            self.toggle_btn.setChecked(True)
+            self.toggle_btn.setStyleSheet("background: #e74c3c;")
             self.status_label.setText(f"Syncing ({self.mode})")
             self.manual_tab.set_enabled_state(True)
             self._update_tray()

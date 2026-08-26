@@ -43,11 +43,20 @@ class BrightnessConfig:
 
 
 @dataclass
+class FavoriteColor:
+    r: int = 255
+    g: int = 255
+    b: int = 255
+    brightness: int = 127
+
+
+@dataclass
 class AppConfig:
     bridge: BridgeConfig = field(default_factory=BridgeConfig)
     sync: SyncConfig = field(default_factory=SyncConfig)
     night: BrightnessConfig = field(default_factory=lambda: BrightnessConfig(15, 100))
     day: BrightnessConfig = field(default_factory=lambda: BrightnessConfig(60, 200))
+    favorites: list[FavoriteColor | None] = field(default_factory=lambda: [None] * 5)
 
 
 def load_config() -> AppConfig:
@@ -95,6 +104,17 @@ def load_config() -> AppConfig:
         d = raw["day"]
         cfg.day = BrightnessConfig(d.get("min_brightness", 60), d.get("max_brightness", 200))
 
+    if "favorites" in raw:
+        favs = raw["favorites"]
+        for i in range(5):
+            key = f"slot{i}"
+            if key in favs:
+                s = favs[key]
+                cfg.favorites[i] = FavoriteColor(
+                    r=s.get("r", 255), g=s.get("g", 255),
+                    b=s.get("b", 255), brightness=s.get("brightness", 127),
+                )
+
     return cfg
 
 
@@ -131,5 +151,17 @@ def save_config(cfg: AppConfig) -> None:
         f"max_brightness = {cfg.day.max_brightness}",
         "",
     ]
+    fav_lines = ["", "[favorites]"]
+    for i, fav in enumerate(cfg.favorites):
+        if fav is not None:
+            fav_lines.extend([
+                f"[favorites.slot{i}]",
+                f"r = {fav.r}",
+                f"g = {fav.g}",
+                f"b = {fav.b}",
+                f"brightness = {fav.brightness}",
+            ])
+    lines.extend(fav_lines)
+    lines.append("")
     CONFIG_PATH.write_text("\n".join(lines))
     CONFIG_PATH.chmod(0o600)

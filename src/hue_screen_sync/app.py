@@ -24,9 +24,14 @@ except ImportError:
 import numpy as np
 from mss import MSS as mss_cls
 
-from .config import load_config, save_config, AppConfig
+import colorsys
+import json
+import math
+import urllib.request
+
+from .config import load_config, save_config, AppConfig, FavoriteColor
 from .sync import SyncThread
-from .color import make_center_weights, extract_scene_color, apply_blur
+from .color import make_center_weights, extract_scene_color, apply_blur, rgb_to_xy, xy_to_rgb
 from .bridge import discover_bridges, create_api_user, get_color_lights
 
 PREVIEW_W, PREVIEW_H = 320, 180
@@ -150,6 +155,374 @@ def labeled_slider(label_text, min_val, max_val, value, callback, unit=""):
         callback(v)
     slider.valueChanged.connect(on_change)
     return container, slider
+
+
+class ColorWheelWidget(QWidget):
+    """HSV color wheel: hue ring with saturation as radius."""
+    color_changed = None  # set by ManualTab
+
+    def __init__(self, size=200):
+        super().__init__()
+        self._size = size
+        self.setFixedSize(size, size)
+        self._hue = 0.0
+        self._sat = 1.0
+        self._wheel_pm = None
+        self._build_wheel()
+
+    def _build_wheel(self):
+        s = self._size
+        img = QImage(s, s, QImage.Format.Format_ARGB32)
+        img.fill(QColor(0, 0, 0, 0))
+        cx, cy = s / 2, s / 2
+        radius = s / 2 - 2
+        for py in range(s):
+            for px in range(s):
+                dx = px - cx
+                dy = py - cy
+                dist = math.sqrt(dx * dx + dy * dy)
+                if dist <= radius:
+                    angle = math.atan2(-dy, dx) / (2 * math.pi) % 1.0
+                    sat = dist / radius
+                    r, g, b = colorsys.hsv_to_rgb(angle, sat, 1.0)
+                    img.setPixelColor(px, py, QColor(int(r * 255), int(g * 255), int(b * 255)))
+        self._wheel_pm = QPixmap.fromImage(img)
+
+    def set_color(self, hue, sat):
+        self._hue = hue
+        self._sat = sat
+        self.update()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if self._wheel_pm:
+            p.drawPixmap(0, 0, self._wheel_pm)
+        cx, cy = self._size / 2, self._size / 2
+        radius = self._size / 2 - 2
+        angle = self._hue * 2 * math.pi
+        r = self._sat * radius
+        mx = cx + r * math.cos(angle)
+        my = cy - r * math.sin(angle)
+        p.setPen(QPen(QColor(255, 255, 255), 2))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawEllipse(int(mx) - 6, int(my) - 6, 12, 12)
+        p.setPen(QPen(QColor(0, 0, 0), 1))
+        p.drawEllipse(int(mx) - 7, int(my) - 7, 14, 14)
+        p.end()
+
+    def mousePressEvent(self, event):
+        self._pick(event.position() if hasattr(event, 'position') else event.pos())
+
+    def mouseMoveEvent(self, event):
+        self._pick(event.position() if hasattr(event, 'position') else event.pos())
+
+    def _pick(self, pos):
+        cx, cy = self._size / 2, self._size / 2
+        radius = self._size / 2 - 2
+        dx = pos.x() - cx
+        dy = pos.y() - cy
+        dist = min(math.sqrt(dx * dx + dy * dy), radius)
+        self._hue = (math.atan2(-dy, dx) / (2 * math.pi)) % 1.0
+        self._sat = dist / radius
+        self.update()
+        if self.color_changed:
+            self.color_changed(self._hue, self._sat)
+
+
+class ManualTab(QWidget):
+    """Manual color control with multiple selection methods and favorites."""
+
+    def __init__(self, config: AppConfig, push_callback):
+        super().__init__()
+        self._config = config
+        self._push = push_callback
+        self._suppressing = False
+        self._r, self._g, self._b = 255, 180, 50
+        self._brightness = 127
+        self._apply_timer = QTimer()
+        self._apply_timer.setSingleShot(True)
+        self._apply_timer.setInterval(100)
+        self._apply_timer.timeout.connect(self._do_apply)
+
+        layout = QVBoxLayout(self)
+
+        # disabled overlay label
+        self._disabled_label = QLabel(
+            "Stop sync to use manual controls")
+        self._disabled_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._disabled_label.setStyleSheet(
+            "color: #e74c3c; font-size: 13px; font-weight: bold; padding: 8px;")
+        self._disabled_label.hide()
+        layout.addWidget(self._disabled_label)
+
+        # main content
+        self._content = QWidget()
+        content_layout = QHBoxLayout(self._content)
+
+        # left column: wheel + large swatch
+        left = QVBoxLayout()
+        self._wheel = ColorWheelWidget(180)
+        self._wheel.color_changed = self._on_wheel_change
+        left.addWidget(self._wheel, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        self._big_swatch = QFrame()
+        self._big_swatch.setFixedSize(180, 60)
+        self._big_swatch.setStyleSheet("border-radius: 8px; border: 2px solid #555;")
+        left.addWidget(self._big_swatch, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        # hex input
+        hex_row = QHBoxLayout()
+        hex_label = QLabel("Hex:")
+        hex_label.setFixedWidth(30)
+        hex_row.addWidget(hex_label)
+        self._hex_edit = QLineEdit("#FFB432")
+        self._hex_edit.setFixedWidth(90)
+        self._hex_edit.setMaxLength(7)
+        self._hex_edit.editingFinished.connect(self._on_hex_input)
+        hex_row.addWidget(self._hex_edit)
+        hex_row.addStretch()
+        left.addLayout(hex_row)
+        left.addStretch()
+        content_layout.addLayout(left)
+
+        # right column: all sliders
+        right = QVBoxLayout()
+
+        # brightness (independent, at the top)
+        bri_group = QGroupBox("Brightness")
+        bri_layout = QVBoxLayout(bri_group)
+        c_bri, self._bri_slider = labeled_slider("Brightness", 1, 254, self._brightness,
+                                                  self._on_bri_slider)
+        bri_layout.addWidget(c_bri)
+        right.addWidget(bri_group)
+
+        # RGB sliders
+        rgb_group = QGroupBox("RGB")
+        rgb_layout = QVBoxLayout(rgb_group)
+        c_r, self._r_slider = labeled_slider("Red", 0, 255, self._r, self._on_rgb_slider)
+        c_g, self._g_slider = labeled_slider("Green", 0, 255, self._g, self._on_rgb_slider)
+        c_b, self._b_slider = labeled_slider("Blue", 0, 255, self._b, self._on_rgb_slider)
+        rgb_layout.addWidget(c_r)
+        rgb_layout.addWidget(c_g)
+        rgb_layout.addWidget(c_b)
+        right.addWidget(rgb_group)
+
+        # HSL sliders
+        hsl_group = QGroupBox("HSL")
+        hsl_layout = QVBoxLayout(hsl_group)
+        c_hue, self._hue_slider = labeled_slider("Hue", 0, 360, 30, self._on_hsl_slider, unit="deg")
+        c_sat, self._sat_slider = labeled_slider("Saturation", 0, 100, 100, self._on_hsl_slider, unit="%")
+        c_lit, self._lit_slider = labeled_slider("Lightness", 0, 100, 50, self._on_hsl_slider, unit="%")
+        hsl_layout.addWidget(c_hue)
+        hsl_layout.addWidget(c_sat)
+        hsl_layout.addWidget(c_lit)
+        right.addWidget(hsl_group)
+
+        # color temperature slider
+        temp_group = QGroupBox("Color Temperature")
+        temp_layout = QVBoxLayout(temp_group)
+        c_temp, self._temp_slider = labeled_slider("Warm / Cool", 2000, 6500, 3500,
+                                                    self._on_temp_slider, unit="K")
+        temp_layout.addWidget(c_temp)
+        temp_desc = QLabel("2000K = candlelight, 4000K = neutral, 6500K = daylight")
+        temp_desc.setStyleSheet("color: #a0a0a0; font-size: 10px;")
+        temp_layout.addWidget(temp_desc)
+        right.addWidget(temp_group)
+
+        content_layout.addLayout(right)
+        layout.addWidget(self._content)
+
+        # favorites row
+        fav_group = QGroupBox("Favorites")
+        fav_layout = QHBoxLayout(fav_group)
+        self._fav_swatches = []
+        self._fav_save_btns = []
+        for i in range(5):
+            slot = QVBoxLayout()
+            swatch = QPushButton()
+            swatch.setFixedSize(48, 48)
+            swatch.setStyleSheet("border-radius: 8px; border: 2px solid #555; background: #333;")
+            swatch.setToolTip(f"Click to load favorite {i + 1}")
+            swatch.clicked.connect(lambda _, idx=i: self._load_fav(idx))
+            slot.addWidget(swatch, alignment=Qt.AlignmentFlag.AlignCenter)
+            save_btn = QPushButton("Save")
+            save_btn.setFixedWidth(48)
+            save_btn.setStyleSheet("font-size: 10px; padding: 2px; background: #444;")
+            save_btn.clicked.connect(lambda _, idx=i: self._save_fav(idx))
+            slot.addWidget(save_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+            fav_layout.addLayout(slot)
+            self._fav_swatches.append(swatch)
+            self._fav_save_btns.append(save_btn)
+        layout.addWidget(fav_group)
+
+        # live indicator
+        self._live_label = QLabel("Changes apply to bulbs live")
+        self._live_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._live_label.setStyleSheet(
+            "color: #27ae60; font-size: 11px; font-style: italic; padding: 4px;")
+        layout.addWidget(self._live_label)
+
+        self._refresh_favorites()
+        self._update_all_from_rgb()
+
+    def set_enabled_state(self, sync_active: bool):
+        self._content.setEnabled(not sync_active)
+        for btn in self._fav_save_btns:
+            btn.setEnabled(not sync_active)
+        for sw in self._fav_swatches:
+            sw.setEnabled(not sync_active)
+        self._disabled_label.setVisible(sync_active)
+        self._live_label.setVisible(not sync_active)
+
+    def _on_wheel_change(self, hue, sat):
+        if self._suppressing:
+            return
+        r, g, b = colorsys.hsv_to_rgb(hue, sat, 1.0)
+        self._r, self._g, self._b = int(r * 255), int(g * 255), int(b * 255)
+        self._suppressing = True
+        self._sync_sliders_from_rgb()
+        self._suppressing = False
+        self._update_display()
+
+    def _on_rgb_slider(self, _=None):
+        if self._suppressing:
+            return
+        self._r = self._r_slider.value()
+        self._g = self._g_slider.value()
+        self._b = self._b_slider.value()
+        self._suppressing = True
+        self._sync_wheel_from_rgb()
+        self._sync_hsl_from_rgb()
+        self._suppressing = False
+        self._update_display()
+
+    def _on_hsl_slider(self, _=None):
+        if self._suppressing:
+            return
+        h = self._hue_slider.value() / 360.0
+        s = self._sat_slider.value() / 100.0
+        l = self._lit_slider.value() / 100.0
+        r, g, b = colorsys.hls_to_rgb(h, l, s)
+        self._r, self._g, self._b = int(r * 255), int(g * 255), int(b * 255)
+        self._suppressing = True
+        self._sync_rgb_sliders()
+        self._sync_wheel_from_rgb()
+        self._suppressing = False
+        self._update_display()
+
+    def _on_temp_slider(self, kelvin):
+        if self._suppressing:
+            return
+        r, g, b = self._kelvin_to_rgb(kelvin)
+        self._r, self._g, self._b = r, g, b
+        self._suppressing = True
+        self._sync_sliders_from_rgb()
+        self._suppressing = False
+        self._update_display()
+
+    def _on_bri_slider(self, val):
+        self._brightness = val
+        self._apply_to_bulbs()
+
+    def _on_hex_input(self):
+        text = self._hex_edit.text().strip().lstrip("#")
+        if len(text) == 6:
+            try:
+                self._r = int(text[0:2], 16)
+                self._g = int(text[2:4], 16)
+                self._b = int(text[4:6], 16)
+                self._suppressing = True
+                self._sync_sliders_from_rgb()
+                self._suppressing = False
+                self._update_display()
+            except ValueError:
+                pass
+
+    def _sync_sliders_from_rgb(self):
+        self._sync_rgb_sliders()
+        self._sync_hsl_from_rgb()
+        self._sync_wheel_from_rgb()
+
+    def _sync_rgb_sliders(self):
+        self._r_slider.setValue(self._r)
+        self._g_slider.setValue(self._g)
+        self._b_slider.setValue(self._b)
+
+    def _sync_hsl_from_rgb(self):
+        r, g, b = self._r / 255.0, self._g / 255.0, self._b / 255.0
+        h, l, s = colorsys.rgb_to_hls(r, g, b)
+        self._hue_slider.setValue(int(h * 360))
+        self._sat_slider.setValue(int(s * 100))
+        self._lit_slider.setValue(int(l * 100))
+
+    def _sync_wheel_from_rgb(self):
+        r, g, b = self._r / 255.0, self._g / 255.0, self._b / 255.0
+        h, s, v = colorsys.rgb_to_hsv(r, g, b)
+        self._wheel.set_color(h, s)
+
+    def _update_all_from_rgb(self):
+        self._suppressing = True
+        self._sync_sliders_from_rgb()
+        self._suppressing = False
+        self._update_display()
+
+    def _update_display(self):
+        self._big_swatch.setStyleSheet(
+            f"background: rgb({self._r},{self._g},{self._b}); "
+            "border-radius: 8px; border: 2px solid #555;")
+        self._hex_edit.setText(f"#{self._r:02x}{self._g:02x}{self._b:02x}")
+        self._apply_to_bulbs()
+
+    def _apply_to_bulbs(self):
+        if not self._apply_timer.isActive():
+            self._apply_timer.start()
+
+    def _do_apply(self):
+        r, g, b = self._r / 255.0, self._g / 255.0, self._b / 255.0
+        x, y = rgb_to_xy(r, g, b)
+        self._push(x, y, self._brightness)
+
+    def _save_fav(self, idx):
+        self._config.favorites[idx] = FavoriteColor(
+            r=self._r, g=self._g, b=self._b, brightness=self._brightness)
+        self._refresh_favorites()
+
+    def _load_fav(self, idx):
+        fav = self._config.favorites[idx]
+        if fav is None:
+            return
+        self._r, self._g, self._b = fav.r, fav.g, fav.b
+        self._brightness = fav.brightness
+        self._bri_slider.setValue(self._brightness)
+        self._update_all_from_rgb()
+
+    def _refresh_favorites(self):
+        for i, fav in enumerate(self._config.favorites):
+            if fav is not None:
+                self._fav_swatches[i].setStyleSheet(
+                    f"background: rgb({fav.r},{fav.g},{fav.b}); "
+                    "border-radius: 8px; border: 2px solid #555;")
+            else:
+                self._fav_swatches[i].setStyleSheet(
+                    "background: #333; border-radius: 8px; border: 2px dashed #555;")
+
+    @staticmethod
+    def _kelvin_to_rgb(kelvin):
+        """Attempt the Tanner Helland algorithm for color temperature to RGB."""
+        temp = kelvin / 100.0
+        if temp <= 66:
+            r = 255
+            g = max(0, min(255, int(99.4708025861 * math.log(temp) - 161.1195681661)))
+            if temp <= 19:
+                b = 0
+            else:
+                b = max(0, min(255, int(138.5177312231 * math.log(temp - 10) - 305.0447927307)))
+        else:
+            r = max(0, min(255, int(329.698727446 * ((temp - 60) ** -0.1332047592))))
+            g = max(0, min(255, int(288.1221695283 * ((temp - 60) ** -0.0755148492))))
+            b = 255
+        return r, g, b
 
 
 class MainWindow(QMainWindow):
@@ -379,6 +752,10 @@ class MainWindow(QMainWindow):
         bridge_layout.addStretch()
         tabs.addTab(bridge_tab, "Bridge")
 
+        # manual tab
+        self.manual_tab = ManualTab(config, self._manual_push)
+        tabs.addTab(self.manual_tab, "Manual")
+
         main_layout.addWidget(tabs)
 
         self._save_btn = QPushButton("Save Settings")
@@ -552,6 +929,27 @@ class MainWindow(QMainWindow):
         self.xy_label.setText(f"xy   {x:.3f}, {y:.3f}")
         self.rgb_label.setText(f"rgb  {r},{g},{b}  {hex_color}")
 
+    def _manual_push(self, x, y, bri):
+        cfg = self.config.bridge
+        if not cfg.ip or not cfg.api_user:
+            self.status_label.setText("No bridge configured")
+            return
+        body = json.dumps({
+            "xy": [round(x, 4), round(y, 4)],
+            "bri": bri,
+            "transitiontime": 4,
+        }).encode()
+        for light_id in cfg.light_ids:
+            url = f"http://{cfg.ip}/api/{cfg.api_user}/lights/{light_id}/state"
+            req = urllib.request.Request(url, data=body, method="PUT")
+            try:
+                urllib.request.urlopen(req, timeout=1)
+            except Exception:
+                pass
+        r_disp, g_disp, b_disp = xy_to_rgb(x, y, bri)
+        self.swatch.set_color(r_disp, g_disp, b_disp)
+        self.status_label.setText("Manual color sent")
+
     def _toggle_sync(self):
         if self.sync_thread and self.sync_thread.isRunning():
             self.sync_thread.stop()
@@ -559,6 +957,7 @@ class MainWindow(QMainWindow):
             self.toggle_btn.setText("Start Sync")
             self.toggle_btn.setChecked(False)
             self.status_label.setText("Preview only")
+            self.manual_tab.set_enabled_state(False)
             self._update_tray()
         else:
             self.sync_thread = SyncThread(self.config, self.mode)
@@ -568,6 +967,7 @@ class MainWindow(QMainWindow):
             self.toggle_btn.setText("Stop Sync")
             self.toggle_btn.setChecked(True)
             self.status_label.setText(f"Syncing ({self.mode})")
+            self.manual_tab.set_enabled_state(True)
             self._update_tray()
 
     def _cycle_mode(self):

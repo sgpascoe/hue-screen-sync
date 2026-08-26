@@ -48,6 +48,7 @@ class FavoriteColor:
     g: int = 255
     b: int = 255
     brightness: int = 127
+    name: str = ""
 
 
 @dataclass
@@ -113,6 +114,7 @@ def load_config() -> AppConfig:
                 cfg.favorites[i] = FavoriteColor(
                     r=s.get("r", 255), g=s.get("g", 255),
                     b=s.get("b", 255), brightness=s.get("brightness", 127),
+                    name=s.get("name", ""),
                 )
 
     return cfg
@@ -160,6 +162,7 @@ def save_config(cfg: AppConfig) -> None:
                 f"g = {fav.g}",
                 f"b = {fav.b}",
                 f"brightness = {fav.brightness}",
+                f'name = "{fav.name}"',
             ])
     lines.extend(fav_lines)
     lines.append("")

@@ -9,8 +9,8 @@ try:
         QSlider, QLabel, QSpinBox, QDoubleSpinBox, QLineEdit, QComboBox,
         QTabWidget, QFrame, QCheckBox,
     )
-    from PySide6.QtGui import QIcon, QPixmap, QImage, QPainter, QColor, QPen, QAction
-    from PySide6.QtCore import Qt, QTimer
+    from PySide6.QtGui import QIcon, QPixmap, QImage, QPainter, QColor, QPen, QAction, QDrag
+    from PySide6.QtCore import Qt, QTimer, QMimeData, QPoint
 except ImportError:
     from PyQt5.QtWidgets import (
         QApplication, QMainWindow, QSystemTrayIcon, QMenu, QWidget,
@@ -18,8 +18,8 @@ except ImportError:
         QSlider, QLabel, QSpinBox, QDoubleSpinBox, QLineEdit, QComboBox,
         QTabWidget, QFrame, QAction, QCheckBox,
     )
-    from PyQt5.QtGui import QIcon, QPixmap, QImage, QPainter, QColor, QPen
-    from PyQt5.QtCore import Qt, QTimer
+    from PyQt5.QtGui import QIcon, QPixmap, QImage, QPainter, QColor, QPen, QDrag
+    from PyQt5.QtCore import Qt, QTimer, QMimeData, QPoint
 
 import numpy as np
 from mss import MSS as mss_cls
@@ -129,6 +129,126 @@ class ColorSwatchWidget(QFrame):
         self.setStyleSheet(
             f"background: rgb({r},{g},{b}); border: 2px solid #555; border-radius: 40px;"
         )
+
+
+class FavoriteSwatchWidget(QFrame):
+    """A single favorite color swatch: shows color + name, supports rename and drag-to-swap."""
+
+    MIME_TYPE = "application/x-hue-fav-index"
+
+    def __init__(self, index: int, parent_tab):
+        super().__init__()
+        self._index = index
+        self._tab = parent_tab
+        self._drag_start = None
+        self.setFixedSize(72, 72)
+        self.setAcceptDrops(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(0)
+
+        self._color_area = QFrame()
+        self._color_area.setFixedHeight(44)
+        self._color_area.setStyleSheet("border-radius: 6px; background: #333;")
+        self._color_area.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        layout.addWidget(self._color_area)
+
+        self._name_label = QLabel("")
+        self._name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._name_label.setStyleSheet("color: #ccc; font-size: 9px; background: transparent;")
+        self._name_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        layout.addWidget(self._name_label)
+
+        self._name_edit = QLineEdit()
+        self._name_edit.setFixedHeight(16)
+        self._name_edit.setStyleSheet(
+            "font-size: 9px; padding: 0 2px; background: #222; color: #fff; border: 1px solid #3a7bd5;")
+        self._name_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._name_edit.setMaxLength(12)
+        self._name_edit.hide()
+        self._name_edit.editingFinished.connect(self._finish_rename)
+        layout.addWidget(self._name_edit)
+
+        self._update_style(empty=True)
+
+    def set_favorite(self, fav: 'FavoriteColor | None'):
+        if fav is None:
+            self._color_area.setStyleSheet("border-radius: 6px; background: #333;")
+            self._name_label.setText("")
+            self._update_style(empty=True)
+        else:
+            self._color_area.setStyleSheet(
+                f"border-radius: 6px; background: rgb({fav.r},{fav.g},{fav.b});")
+            self._name_label.setText(fav.name or f"#{self._index + 1}")
+            self._update_style(empty=False)
+
+    def _update_style(self, empty: bool):
+        border = "2px dashed #555" if empty else "2px solid #555"
+        self.setStyleSheet(f"FavoriteSwatchWidget {{ border-radius: 8px; border: {border}; background: #2a2a2a; }}")
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_start = event.position().toPoint() if hasattr(event.position(), 'toPoint') else event.pos()
+
+    def mouseMoveEvent(self, event):
+        if self._drag_start is None:
+            return
+        pos = event.position().toPoint() if hasattr(event.position(), 'toPoint') else event.pos()
+        if (pos - self._drag_start).manhattanLength() < 20:
+            return
+        fav = self._tab._config.favorites[self._index]
+        if fav is None:
+            return
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setData(self.MIME_TYPE, str(self._index).encode())
+        drag.setMimeData(mime)
+        pm = QPixmap(self.size())
+        self.render(pm)
+        drag.setPixmap(pm.scaled(60, 60, Qt.AspectRatioMode.KeepAspectRatio))
+        drag.setHotSpot(QPoint(30, 30))
+        drag.exec(Qt.DropAction.MoveAction)
+        self._drag_start = None
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self._drag_start is not None:
+            self._drag_start = None
+            self._tab._load_fav(self._index)
+
+    def mouseDoubleClickEvent(self, event):
+        self._drag_start = None
+        fav = self._tab._config.favorites[self._index]
+        if fav is None:
+            return
+        self._name_label.hide()
+        self._name_edit.setText(fav.name)
+        self._name_edit.show()
+        self._name_edit.setFocus()
+        self._name_edit.selectAll()
+
+    def _finish_rename(self):
+        fav = self._tab._config.favorites[self._index]
+        if fav is not None:
+            fav.name = self._name_edit.text().strip()
+            self._name_label.setText(fav.name or f"#{self._index + 1}")
+        self._name_edit.hide()
+        self._name_label.show()
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasFormat(self.MIME_TYPE):
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        src = int(event.mimeData().data(self.MIME_TYPE).data().decode())
+        dst = self._index
+        if src == dst:
+            return
+        favs = self._tab._config.favorites
+        favs[src], favs[dst] = favs[dst], favs[src]
+        self._tab._refresh_favorites()
+        event.acceptProposedAction()
 
 
 def labeled_slider(label_text, min_val, max_val, value, callback, unit=""):
@@ -309,16 +429,14 @@ class ManualTab(QWidget):
         rgb_layout.addWidget(c_b)
         right.addWidget(rgb_group)
 
-        # HSL sliders
-        hsl_group = QGroupBox("HSL")
-        hsl_layout = QVBoxLayout(hsl_group)
+        # Hue / Saturation sliders (Lightness removed — bulb Brightness handles dimming)
+        hs_group = QGroupBox("Hue / Saturation")
+        hs_layout = QVBoxLayout(hs_group)
         c_hue, self._hue_slider = labeled_slider("Hue", 0, 360, 30, self._on_hsl_slider, unit="deg")
         c_sat, self._sat_slider = labeled_slider("Saturation", 0, 100, 100, self._on_hsl_slider, unit="%")
-        c_lit, self._lit_slider = labeled_slider("Lightness", 0, 100, 50, self._on_hsl_slider, unit="%")
-        hsl_layout.addWidget(c_hue)
-        hsl_layout.addWidget(c_sat)
-        hsl_layout.addWidget(c_lit)
-        right.addWidget(hsl_group)
+        hs_layout.addWidget(c_hue)
+        hs_layout.addWidget(c_sat)
+        right.addWidget(hs_group)
 
         # color temperature slider
         temp_group = QGroupBox("Color Temperature")
@@ -334,27 +452,30 @@ class ManualTab(QWidget):
         content_layout.addLayout(right)
         layout.addWidget(self._content)
 
-        # favorites row
+        # favorites row — click to load, double-click to rename, drag to swap
         fav_group = QGroupBox("Favorites")
-        fav_layout = QHBoxLayout(fav_group)
+        fav_outer = QVBoxLayout(fav_group)
+        fav_row = QHBoxLayout()
         self._fav_swatches = []
         self._fav_save_btns = []
         for i in range(5):
             slot = QVBoxLayout()
-            swatch = QPushButton()
-            swatch.setFixedSize(48, 48)
-            swatch.setStyleSheet("border-radius: 8px; border: 2px solid #555; background: #333;")
-            swatch.setToolTip(f"Click to load favorite {i + 1}")
-            swatch.clicked.connect(lambda _, idx=i: self._load_fav(idx))
+            swatch = FavoriteSwatchWidget(i, self)
+            swatch.setToolTip("Click: load  |  Double-click: rename  |  Drag: swap")
             slot.addWidget(swatch, alignment=Qt.AlignmentFlag.AlignCenter)
             save_btn = QPushButton("Save")
-            save_btn.setFixedWidth(48)
+            save_btn.setFixedWidth(72)
             save_btn.setStyleSheet("font-size: 10px; padding: 2px; background: #444;")
             save_btn.clicked.connect(lambda _, idx=i: self._save_fav(idx))
             slot.addWidget(save_btn, alignment=Qt.AlignmentFlag.AlignCenter)
-            fav_layout.addLayout(slot)
+            fav_row.addLayout(slot)
             self._fav_swatches.append(swatch)
             self._fav_save_btns.append(save_btn)
+        fav_outer.addLayout(fav_row)
+        fav_hint = QLabel("Click to load  ·  Double-click to rename  ·  Drag to reorder")
+        fav_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        fav_hint.setStyleSheet("color: #666; font-size: 9px;")
+        fav_outer.addWidget(fav_hint)
         layout.addWidget(fav_group)
 
         # live indicator
@@ -403,8 +524,7 @@ class ManualTab(QWidget):
             return
         h = self._hue_slider.value() / 360.0
         s = self._sat_slider.value() / 100.0
-        l = self._lit_slider.value() / 100.0
-        r, g, b = colorsys.hls_to_rgb(h, l, s)
+        r, g, b = colorsys.hls_to_rgb(h, 0.5, s)
         self._r, self._g, self._b = int(r * 255), int(g * 255), int(b * 255)
         self._suppressing = True
         self._sync_rgb_sliders()
@@ -455,7 +575,6 @@ class ManualTab(QWidget):
         h, l, s = colorsys.rgb_to_hls(r, g, b)
         self._hue_slider.setValue(int(h * 360))
         self._sat_slider.setValue(int(s * 100))
-        self._lit_slider.setValue(int(l * 100))
 
     def _sync_wheel_from_rgb(self):
         r, g, b = self._r / 255.0, self._g / 255.0, self._b / 255.0
@@ -492,8 +611,10 @@ class ManualTab(QWidget):
         self._push(x, y, self._brightness)
 
     def _save_fav(self, idx):
+        existing = self._config.favorites[idx]
+        name = existing.name if existing else ""
         self._config.favorites[idx] = FavoriteColor(
-            r=self._r, g=self._g, b=self._b, brightness=self._brightness)
+            r=self._r, g=self._g, b=self._b, brightness=self._brightness, name=name)
         self._refresh_favorites()
 
     def _load_fav(self, idx):
@@ -507,13 +628,7 @@ class ManualTab(QWidget):
 
     def _refresh_favorites(self):
         for i, fav in enumerate(self._config.favorites):
-            if fav is not None:
-                self._fav_swatches[i].setStyleSheet(
-                    f"background: rgb({fav.r},{fav.g},{fav.b}); "
-                    "border-radius: 8px; border: 2px solid #555;")
-            else:
-                self._fav_swatches[i].setStyleSheet(
-                    "background: #333; border-radius: 8px; border: 2px dashed #555;")
+            self._fav_swatches[i].set_favorite(fav)
 
     @staticmethod
     def _kelvin_to_rgb(kelvin):
@@ -847,6 +962,38 @@ class MainWindow(QMainWindow):
             lambda _: setattr(self.config.sync, "monitor_index", self.monitor_combo.currentData())
         )
 
+    def _poll_bulb_color(self):
+        """Fetch actual bulb state from bridge. Returns (x, y, bri, r, g, b) or None.
+        Polls at most once per second to avoid hammering the bridge."""
+        now = __import__('time').monotonic()
+        if hasattr(self, '_last_bulb_poll') and (now - self._last_bulb_poll) < 1.0:
+            return self._cached_bulb_color
+        self._last_bulb_poll = now
+
+        cfg = self.config.bridge
+        if not cfg.ip or not cfg.api_user or not cfg.light_ids:
+            self._cached_bulb_color = None
+            return None
+
+        lid = cfg.light_ids[0]
+        url = f"http://{cfg.ip}/api/{cfg.api_user}/lights/{lid}"
+        try:
+            resp = urllib.request.urlopen(url, timeout=1)
+            data = json.loads(resp.read())
+            state = data.get("state", {})
+            if not state.get("on", False):
+                self._cached_bulb_color = None
+                return None
+            xy = state.get("xy", [0.3127, 0.3290])
+            bri = state.get("bri", 127)
+            x, y = float(xy[0]), float(xy[1])
+            sr, sg, sb = xy_to_rgb(x, y, bri)
+            self._cached_bulb_color = (x, y, bri, sr, sg, sb)
+            return self._cached_bulb_color
+        except Exception:
+            self._cached_bulb_color = None
+            return None
+
     def _capture_preview(self):
         """Lightweight preview — just grab, downsample, show. No heavy blur here."""
         try:
@@ -882,29 +1029,33 @@ class MainWindow(QMainWindow):
 
             self.preview.show_frame(thumb, crop_rect)
 
-            # when sync is off, compute the color locally for the info labels
+            # when sync is off, show actual bulb color (polled) or screen preview
             if not (self.sync_thread and self.sync_thread.isRunning()):
-                sh, sw = thumb.shape[:2]
-                cy0 = int(sh * y0_f)
-                cy1 = max(cy0 + 1, int(sh * y1_f))
-                cx0 = int(sw * x0_f)
-                cx1 = max(cx0 + 1, int(sw * x1_f))
-                cropped = thumb[cy0:cy1, cx0:cx1]
-                ch, cw_px = cropped.shape[:2]
-
-                flat = cropped.reshape(-1, 3)
-                center_w = make_center_weights(cw_px, ch, 1)
-                bcfg = self.config.day if self.mode == "day" else self.config.night
-                x, y, bri, preview_rgb = extract_scene_color(
-                    flat, center_w, bcfg.min_brightness, bcfg.max_brightness,
-                    sat_boost=self.config.sync.saturation,
-                    gamma=self.config.sync.gamma,
-                )
-                # swatch: use xy_to_rgb with correct inverse matrix — matches bulb output
-                from .color import xy_to_rgb
-                sr, sg, sb = xy_to_rgb(x, y, bri)
-                self.swatch.set_color(sr, sg, sb)
-                self._update_info_labels(x, y, bri, sr, sg, sb)
+                bulb = self._poll_bulb_color()
+                if bulb:
+                    x, y, bri, sr, sg, sb = bulb
+                    self.swatch.set_color(sr, sg, sb)
+                    self._update_info_labels(x, y, bri, sr, sg, sb)
+                else:
+                    sh, sw = thumb.shape[:2]
+                    cy0 = int(sh * y0_f)
+                    cy1 = max(cy0 + 1, int(sh * y1_f))
+                    cx0 = int(sw * x0_f)
+                    cx1 = max(cx0 + 1, int(sw * x1_f))
+                    cropped = thumb[cy0:cy1, cx0:cx1]
+                    ch, cw_px = cropped.shape[:2]
+                    flat = cropped.reshape(-1, 3)
+                    center_w = make_center_weights(cw_px, ch, 1)
+                    bcfg = self.config.day if self.mode == "day" else self.config.night
+                    x, y, bri, preview_rgb = extract_scene_color(
+                        flat, center_w, bcfg.min_brightness, bcfg.max_brightness,
+                        sat_boost=self.config.sync.saturation,
+                        gamma=self.config.sync.gamma,
+                    )
+                    from .color import xy_to_rgb
+                    sr, sg, sb = xy_to_rgb(x, y, bri)
+                    self.swatch.set_color(sr, sg, sb)
+                    self._update_info_labels(x, y, bri, sr, sg, sb)
 
         except (OSError, ValueError, ImportError) as e:
             self.status_label.setText(f"Preview error: {type(e).__name__}")

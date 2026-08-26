@@ -1,46 +1,89 @@
 # Hue Screen Sync
 
-Sync your display's dominant color to Philips Hue bulbs for ambient lighting. Built for Linux (Mint priority).
+**Make your Philips Hue bulbs match whatever's on your screen.** Playing a game, watching a movie, or just browsing — your room lighting follows along in real time.
 
-## Features
+![Linux](https://img.shields.io/badge/Linux-X11-blue) ![Python](https://img.shields.io/badge/Python-3.10+-green) ![License](https://img.shields.io/badge/License-MIT-yellow)
 
-- **Real-time screen sampling** — captures your display at ~10 Hz
-- **Centre-weighted color extraction** — focuses on the action, ignores HUD/UI edges
-- **Day/Night modes** — separate brightness curves for different times
-- **System tray app** — left-click to toggle, right-click for settings
-- **Settings UI** — configure bridge, brightness, smoothing, monitor selection
-- **HUD filtering** — clips the top 2% brightest pixels to ignore UI overlays
+## What It Does
 
-## Setup
+Your screen is captured ~10 times per second. The app finds the dominant color, then sends it to your Hue bulbs. The result: your room glows whatever color your screen shows — reds during combat, blues during night scenes, greens in a forest.
 
-1. Copy the example config:
-   ```bash
-   mkdir -p ~/.config/hue-screen-sync
-   cp config.example.toml ~/.config/hue-screen-sync/config.toml
-   ```
+It runs as a system tray app with a settings window. No terminal needed after install.
 
-2. Edit `~/.config/hue-screen-sync/config.toml` with your Hue Bridge IP and API user.
-   - Find your bridge: https://discovery.meethue.com/
-   - Create an API user: https://developers.meethue.com/develop/get-started-2/
+## Quick Start
 
-3. Install and run:
-   ```bash
-   pip install .
-   hue-screen-sync
-   ```
+### 1. Install
 
-   Or run directly:
-   ```bash
-   PYTHONPATH=src python3 -m hue_screen_sync.app
-   ```
+```bash
+pip install git+https://github.com/sgpascoe/hue-screen-sync.git
+```
 
-## Requirements
+Or clone and install locally:
 
-- Linux (X11) — tested on Linux Mint 22 Cinnamon
-- Python 3.10+
-- Philips Hue Bridge + color-capable bulb
-- PySide6 or PyQt5
+```bash
+git clone https://github.com/sgpascoe/hue-screen-sync.git
+cd hue-screen-sync
+pip install .
+```
+
+### 2. Run
+
+```bash
+hue-screen-sync
+```
+
+### 3. Connect Your Bridge
+
+When the app opens, go to the **Bridge** tab:
+
+1. Click **Auto-Discover** — it finds your Hue Bridge on your network
+2. Press the physical button on your Hue Bridge
+3. Click **Pair** in the app
+4. Tick the bulbs you want to sync
+
+That's it. Hit **Start Sync** and your lights follow your screen.
+
+## What You Need
+
+- **Linux** with X11 (tested on Linux Mint 22 Cinnamon, should work on Ubuntu/Fedora/etc)
+- **Python 3.10** or newer
+- **Philips Hue Bridge** (the square one that plugs into your router)
+- **At least one color-capable Hue bulb** (White Ambiance or Color)
+
+## Settings
+
+Everything is adjustable through the app's UI — no config files to edit.
+
+| Setting | What It Does |
+|---------|-------------|
+| **Saturation** | How vivid the colors are. Crank it up for games, down for movies |
+| **Blur** | Smooths the screen sample. Higher = more averaged, less flickery |
+| **Brightness bias** | Shifts the bulb brighter or darker than what the screen shows |
+| **Crop** | Ignore edges of the screen (useful to skip HUD elements in games) |
+| **Capture rate** | How often the screen is sampled (1-30 times per second) |
+| **Responsiveness** | Low = gradual color changes, High = instant reaction |
+| **Bulb fade** | How quickly the bulb transitions between colors |
+| **Day/Night mode** | Separate brightness ranges for daytime and nighttime use |
+
+Settings are saved to `~/.config/hue-screen-sync/config.toml`.
+
+## Tips
+
+- **For gaming:** Set saturation high, responsiveness high, and crop the HUD edges
+- **For movies:** Lower the responsiveness for smoother transitions
+- **Multiple monitors:** Pick which display to sync from in the Display tab
+- **System tray:** Minimize to tray. Left-click the tray icon to show/hide, right-click for quick controls
+
+## How It Works (The Short Version)
+
+1. Grabs a screenshot of your chosen monitor
+2. Downsamples and center-weights it (the middle of the screen matters more than edges)
+3. Runs KMeans clustering to find the dominant color
+4. Applies your saturation/gamma/brightness settings
+5. Converts to CIE xy color space (what Hue bulbs understand)
+6. Sends it to the bridge via the local REST API
+7. Repeats 10x per second
 
 ## License
 
-MIT
+MIT — do whatever you want with it.

@@ -6,7 +6,7 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [{ name = "Sam Pascoe" }]
-keywords = ["hue", "ambient", "screen-sync", "philips-hue", "linux"]
+keywords = ["hue", "ambient-lighting", "screen-sync", "philips-hue", "linux", "bias-lighting", "ambilight", "screen-color", "smart-home", "game-lighting"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: X11 Applications :: Qt",

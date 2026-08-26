@@ -74,11 +74,22 @@ Settings are saved to `~/.config/hue-screen-sync/config.toml`.
 - **Multiple monitors:** Pick which display to sync from in the Display tab
 - **System tray:** Minimize to tray. Left-click the tray icon to show/hide, right-click for quick controls
 
+## Manual Control
+
+When sync is off, the **Manual** tab gives you direct bulb control:
+
+- **Color wheel** — click to pick a color
+- **RGB / Hue+Saturation / Hex / Color Temperature** sliders — all stay in sync
+- **Brightness** — independent bulb dimming (1–254)
+- **Favorites** — 5 slots you can save, rename (double-click), and drag to reorder. Persisted across sessions.
+
+When you stop sync, bulbs return to whatever color they were before sync started.
+
 ## How It Works (The Short Version)
 
 1. Grabs a screenshot of your chosen monitor
 2. Downsamples and center-weights it (the middle of the screen matters more than edges)
-3. Runs KMeans clustering to find the dominant color
+3. Averages in OKLab perceptual color space for accurate blending
 4. Applies your saturation/gamma/brightness settings
 5. Converts to CIE xy color space (what Hue bulbs understand)
 6. Sends it to the bridge via the local REST API

@@ -27,6 +27,7 @@ from mss import MSS as mss_cls
 import colorsys
 import json
 import math
+import threading
 import urllib.request
 
 from .config import load_config, save_config, AppConfig, FavoriteColor
@@ -939,21 +940,21 @@ class MainWindow(QMainWindow):
     def _manual_push(self, x, y, bri):
         cfg = self.config.bridge
         if not cfg.ip or not cfg.api_user:
-            self.status_label.setText("No bridge configured")
             return
         body = json.dumps({
             "xy": [round(x, 4), round(y, 4)],
             "bri": bri,
             "transitiontime": 4,
         }).encode()
-        for light_id in cfg.light_ids:
-            url = f"http://{cfg.ip}/api/{cfg.api_user}/lights/{light_id}/state"
-            req = urllib.request.Request(url, data=body, method="PUT")
-            try:
-                urllib.request.urlopen(req, timeout=1)
-            except Exception:
-                pass
-        self.status_label.setText("Manual color sent")
+        def _send():
+            for light_id in cfg.light_ids:
+                url = f"http://{cfg.ip}/api/{cfg.api_user}/lights/{light_id}/state"
+                req = urllib.request.Request(url, data=body, method="PUT")
+                try:
+                    urllib.request.urlopen(req, timeout=0.5)
+                except Exception:
+                    pass
+        threading.Thread(target=_send, daemon=True).start()
 
     def _toggle_sync(self):
         if self.sync_thread and self.sync_thread.isRunning():

@@ -946,8 +946,6 @@ class MainWindow(QMainWindow):
                 urllib.request.urlopen(req, timeout=1)
             except Exception:
                 pass
-        r_disp, g_disp, b_disp = xy_to_rgb(x, y, bri)
-        self.swatch.set_color(r_disp, g_disp, b_disp)
         self.status_label.setText("Manual color sent")
 
     def _toggle_sync(self):

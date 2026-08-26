@@ -1,0 +1,32 @@
+# Hue Screen Sync — configuration
+# Copy to ~/.config/hue-screen-sync/config.toml
+# Find your bridge: https://discovery.meethue.com/
+# Create API user: https://developers.meethue.com/develop/get-started-2/
+# Or use Auto-Discover and Pair in the app's Bridge tab.
+
+[bridge]
+ip = ""
+api_user = ""
+light_ids = []
+
+[sync]
+sample_hz = 10
+transition_time = 1
+smoothing = 0.35
+saturation = 1.8
+blur_radius = 0
+gamma = 1.8
+
+[sync.crop]
+left = 0
+right = 0
+top = 0
+bottom = 0
+
+[night]
+min_brightness = 15
+max_brightness = 100
+
+[day]
+min_brightness = 60
+max_brightness = 200

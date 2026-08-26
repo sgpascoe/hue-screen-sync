@@ -1,0 +1,46 @@
+[project]
+name = "hue-screen-sync"
+version = "0.1.0"
+description = "Sync your display's dominant color to Philips Hue bulbs for ambient lighting"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [{ name = "Sam Pascoe" }]
+keywords = ["hue", "ambient", "screen-sync", "philips-hue", "linux"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: X11 Applications :: Qt",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Desktop Environment",
+]
+dependencies = [
+    "PySide6>=6.7",
+    "mss>=10.0",
+    "numpy>=1.26",
+    "scipy>=1.12",
+]
+
+[project.scripts]
+hue-screen-sync = "hue_screen_sync.app:main"
+
+[project.urls]
+Repository = "https://github.com/sgpascoe/hue-screen-sync"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hue_screen_sync"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
